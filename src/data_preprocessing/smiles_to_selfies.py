@@ -62,13 +62,38 @@ class FileToSelfies:
             df.to_parquet(output_path, index=False)
         except Exception as e:
             print(f"cant write  {output_path}: {e}")
-
+class TxtToSelfies:
+    def __init__(self, smiles_path: str, selfies_path: str):
+        self.smiles_path = smiles_path
+        self.selfies_path = selfies_path
+    
+    def convert_smiles(self) -> None:
+        df = pd.read_csv(self.smiles_path)
+    
+        smiles = df["smiles"].dropna().tolist()
+        
+        selfies = SmilesToSelfies().transform(smiles)
+        self._selfies_to_txt(self.selfies_path, selfies)
+        
+    def _selfies_to_txt(self, output_path: str, selfies: List[str]) -> None:
+        with open(output_path, "w") as f:
+            for s in selfies:
+                f.write(f"{s}\n")
+    
+    
 def main():
     smiles_dir = '/data/tzeshinchen/research/dataset/zinc20'
     selfies_dir = '/data/tzeshinchen/RLMOE_kinase_inhibitor/dataset'
 
-    converter = FileToSelfies(smiles_dir, selfies_dir)
-    converter.read_smiles()
+    # converter = FileToSelfies(smiles_dir, selfies_dir)
+    # converter.read_smiles()
+    
+    smiles_path = '/data/tzeshinchen/RLMOE_kinase_inhibitor/dataset/Inhibitor/kinase_in.csv'
+    converter = TxtToSelfies(smiles_path, '/data/tzeshinchen/RLMOE_kinase_inhibitor/dataset/inhibitor_selfies.txt')
+    converter.convert_smiles()
+    
+    
+    
 
 if __name__ == "__main__":
     main()

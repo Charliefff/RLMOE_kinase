@@ -1,20 +1,35 @@
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers, Regex
+import os
+os.environ["RAYON_NUM_THREADS"] = "15"
+
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers, processors
+from tokenizers import Regex
+from collections import Counter
+import pandas as pd
+from tqdm import tqdm
+import re
+from transformers import PreTrainedTokenizerFast
+from ape_tokenizer import APETokenizer
+
+def build_tokenizer(path, output_path):
+
+    tokenizer = APETokenizer()
+    print("Training tokenizer...")
+    with open(path, "r") as f:
+        selfies_data = [line.strip() for line in f.readlines()]
+        
+    tokenizer.train(selfies_data, max_vocab_size=10000, min_freq_for_merge=50, save_checkpoint=True, checkpoint_path="./checkpoints")
+    tokenizer.save_vocabulary(output_path)
+    return
 
 
 def main():
-    path = '/data/tzeshinchen/RLMOE_kinase_inhibitor/dataset/selfies.txt'
-    tokenizer = Tokenizer(models.BPE())
-    tokenizer.pre_tokenizer = pre_tokenizers.Split(pattern=Regex(r"(\[[^\]]+\])"), behavior="isolated")
-    trainer = trainers.BpeTrainer(
-        vocab_size=3000, 
-        special_tokens=["[PAD]", "[CLS]", "[SEP]", "[MASK]"]
-    )
+    path = '/data/tzeshinchen/RLMOE_kinase_inhibitor/dataset/extracted_file.txt'
+    output_path = "trained_vocabulary.json"
 
-    tokenizer.train([path], trainer)
+    print("Vocab file found, building tokenizer")
+    build_tokenizer(path, output_path)
+    print("Tokenizer built")
 
-    # 儲存 Tokenizer
-    tokenizer.save("./selfies_bpe.json")
-
-    
 if __name__ == '__main__':
+ 
     main()
