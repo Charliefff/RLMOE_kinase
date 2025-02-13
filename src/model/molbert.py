@@ -1,3 +1,4 @@
+import os
 from transformers import (
     PreTrainedTokenizerFast, BertConfig, BertForMaskedLM, 
     DataCollatorForLanguageModeling, Trainer, TrainingArguments
@@ -8,24 +9,24 @@ from datasets import Dataset
 from datasets import load_dataset
 from dataclasses import dataclass, field
 import torch
-import os
-
 
 import warnings
 warnings.simplefilter("ignore", category=FutureWarning)
 
+from ape_tokenizer import APETokenizer
 
 @dataclass
 class BertEmbedding:
     selfies_tokenizer_path: str
     train_path: str
     dataset_path: str = None
-    tokenizer: PreTrainedTokenizerFast = field(init=False)
+    tokenizer: APETokenizer = field(init=False)
     dataset: Dataset = field(init=False)
     model: BertForMaskedLM = field(init=False)
 
     def __post_init__(self):
-        self.tokenizer = self._load_tokenizer(self.selfies_tokenizer_path)
+        self.tokenizer = APETokenizer()
+        self._load_tokenizer()
         if self.dataset_path is None:
             self.dataset = self._dataset()
         else:
@@ -35,15 +36,15 @@ class BertEmbedding:
 
     def training(self, 
                  output_dir: str = "./bert-bpe-selfies",
-                 gradient_accumulation_steps: int = 4,
-                 per_device_train_batch_size: int = 32,
-                 num_train_epochs: int = 10,
+                 gradient_accumulation_steps: int = 2,
+                 per_device_train_batch_size: int = 4096,
+                 num_train_epochs: int = 20,
                  save_strategy: str = "steps",
                  eval_steps: int = 10000):
         
         wandb.init(
-            project="BERT-Selfies-Embedding",   # 這裡改成你的專案名稱
-            name="bert_embedding_test0",  # 這是這次訓練的名稱
+            project="BERT-Selfies-Embedding",
+            name="bert_embedding_training_kinase3",
             config={
                 "gradient_accumulation_steps": gradient_accumulation_steps,
                 "per_device_train_batch_size": per_device_train_batch_size,
@@ -64,10 +65,11 @@ class BertEmbedding:
             num_train_epochs=num_train_epochs,
             save_strategy=save_strategy,
             save_steps=eval_steps,
-            evaluation_strategy="steps",
-            eval_steps=eval_steps,
+            evaluation_strategy="no",
             logging_dir="./logs",
-            logging_steps=5000,
+            logging_steps=100,
+            dataloader_num_workers=8,
+            dataloader_pin_memory=True,
             fp16=True,
             report_to="wandb",
         )
@@ -82,72 +84,56 @@ class BertEmbedding:
         trainer.train()
         wandb.finish()
 
-    def testing(self, 
-                test_selfies: str):
-        input_ids = self.tokenizer(test_selfies, 
-                                                return_tensors="pt",
-                                                max_length=64,
-                                                padding="max_length", 
-                                                truncation=True)["input_ids"].to(self.model.device)
-
+    def testing(self, test_selfies: str):
+        input_ids = self.tokenizer(test_selfies,
+                                   max_length=64,
+                                   padding="max_length",
+                                   return_tensors="pt")["input_ids"].to(self.model.device)
+        input_ids = input_ids.unsqueeze(0)
         with torch.no_grad():
             outputs = self.model(input_ids)
             logits = outputs.logits 
         return logits
 
     
-    def evaluate(self):
-        print("Evaluating Model...")
-        results = self.model.evaluate(self.dataset)
-        return results
-
-    def embed(self, 
-              selfies: str):
+    def embed(self, selfies: str):
         input_ids = self.tokenizer(selfies, 
-                                return_tensors="pt", 
-                                max_length=64,
-                                padding="max_length", 
-                                truncation=True)["input_ids"].to(self.model.device)
+                                    max_length=64,
+                                    padding="max_length",   
+                                    return_tensors="pt")["input_ids"].to(self.model.device)
+        input_ids = input_ids.unsqueeze(0)
 
         with torch.no_grad():
             embeddings = self.model.bert(input_ids).last_hidden_state.mean(dim=1)
 
         return embeddings
 
-    def _load_tokenizer(self, 
-                        max_length=64):
-        return PreTrainedTokenizerFast.from_pretrained(self.selfies_tokenizer_path, 
-                                    model_max_length=max_length, 
-                                    padding=True, 
-                                    truncation=True)
-
-
+    def _load_tokenizer(self):
+        return self.tokenizer.load_vocabulary(self.selfies_tokenizer_path)
 
     def _dataset(self):
-        
-        dataset_path = "dataset_ape_selfies"
+        dataset_path = "/data/tzeshinchen/RLMOE_kinase_inhibitor/dataset/apeZinc_dataset"
         if os.path.exists(dataset_path):
             return Dataset.load_from_disk(dataset_path)
         else:
-            
             dataset = load_dataset("text", data_files=self.train_path, split="train")
 
             def tokenize_function(examples):
-                return self.tokenizer(examples["text"],
-                                    max_length=64, 
-                                    padding="max_length", 
-                                    truncation=True)
+                tokenized = self.tokenizer(examples["text"],
+                                             padding="max_length",
+                                             max_length=64)
+                tokenized["labels"] = tokenized["input_ids"].copy() 
+                return tokenized
             
-            dataset = dataset.map(tokenize_function, batched=True, num_proc=8)
-
+            dataset = dataset.map(tokenize_function, num_proc=16)
             dataset = dataset.remove_columns(["text"])
             dataset.save_to_disk(dataset_path)
-            return dataset
 
+            return dataset
 
     def _bertmodel(self, 
                    hidden_size: int = 256, 
-                   num_hidden_layers: int = 8, 
+                   num_hidden_layers: int = 8,
                    num_attention_heads: int = 8, 
                    intermediate_size: int = 512):
         config = BertConfig(
@@ -159,9 +145,8 @@ class BertEmbedding:
         )
         return config
 
-
 def main():
-    selfies_tokenizer_path = "/data/tzeshinchen/RLMOE_kinase_inhibitor/src/data_preprocessing/kinase_ape_tokenizer"
+    selfies_tokenizer_path = "/data/tzeshinchen/RLMOE_kinase_inhibitor/src/data_preprocessing/embedding/trained_vocabulary.json"
     train_path = "/data/tzeshinchen/RLMOE_kinase_inhibitor/dataset/extracted_file.txt"
 
     bert_emb = BertEmbedding(selfies_tokenizer_path, train_path)
@@ -171,7 +156,6 @@ def main():
     print("Testing : ", bert_emb.testing(test_selfies))
     embedding = bert_emb.embed(test_selfies)
     print("SELFIES Embedding:", embedding.shape)
-
 
 if __name__ == '__main__':
     main()
